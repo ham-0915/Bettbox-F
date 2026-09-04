@@ -116,28 +116,26 @@ Future<void> _service(List<String> flags) async {
     final smartAutoStopLock = Lock();
 
     // --- Operation cooldown ---
-    // After smartStop/smartResume, skip checks for 3 seconds to prevent
-    // rapid cycling (e.g. WiFi brief disconnect -> reconnect -> disconnect)
     DateTime? _lastSmartOperationTime;
     const _cooldownDuration = Duration(seconds: 3);
 
     bool _isInCooldown() {
       if (_lastSmartOperationTime == null) return false;
-      return DateTime.now().difference(_lastSmartOperationTime!) < _cooldownDuration;
+      return DateTime.now().difference(_lastSmartOperationTime!) <
+          _cooldownDuration;
     }
 
     // --- Smart-stopped polling timer ---
-    // When VPN is smart-stopped, poll every 1 second for up to 30 seconds.
-    // Covers Doze-delayed network callbacks (e.g. WiFi toggle after sleep).
-    // After 30s, relies on onAvailable/onLost callbacks (screen-on triggers them).
     Timer? smartStoppedPollTimer;
 
     void stopSmartStoppedPoll() {
       smartStoppedPollTimer?.cancel();
     }
 
-    // [FIX] Moved startSmartStoppedPoll() before checkSmartAutoStop()
-    // to resolve "Local variable can't be referenced before it is declared" error.
+    // Forward declaration to resolve circular reference between
+    // checkSmartAutoStop and startSmartStoppedPoll.
+    late Future<void> Function() checkSmartAutoStop;
+
     void startSmartStoppedPoll() {
       smartStoppedPollTimer?.cancel();
       int pollCount = 0;
@@ -164,7 +162,7 @@ Future<void> _service(List<String> flags) async {
       );
     }
 
-    Future<void> checkSmartAutoStop() async {
+    Future<void> _doCheckSmartAutoStop() async {
       try {
         if (_isInCooldown()) return;
         final vpnProps = globalState.config.vpnProps;
@@ -208,6 +206,9 @@ Future<void> _service(List<String> flags) async {
         commonPrint.log('Smart auto stop check failed: $e');
       }
     }
+
+    // Bind the forward-declared variable to the actual implementation
+    checkSmartAutoStop = _doCheckSmartAutoStop;
 
     // Debounced version for network change events
     int _networkChangeCheckSequence = 0;
@@ -264,7 +265,9 @@ Future<void> _service(List<String> flags) async {
       return;
     }
 
-    commonPrint.log('Executing ${bootStart ? "boot" : "quick"} start sequence');
+    commonPrint.log(
+      'Executing ${bootStart ? "boot" : "quick"} start sequence',
+    );
     await ClashCore.initGeo();
     app.tip(appLocalizations.startVpn);
     final homeDirPath = await appPath.homeDirPath;
@@ -294,9 +297,6 @@ Future<void> _service(List<String> flags) async {
           return;
         }
         await vpn?.start(clashLibHandler.getAndroidVpnOptions());
-        // Smart auto-stop: retry every 1 second, up to 8 attempts.
-        // Once smart-stopped, polling timer takes over.
-        // Cooldown prevents rapid cycling after each state change.
         Future(() async {
           final vpnProps = globalState.config.vpnProps;
           if (!vpnProps.smartAutoStop) return;
@@ -342,7 +342,9 @@ Future<void> _service(List<String> flags) async {
 void _handleMainIpc(ClashLibHandler clashLibHandler) {
   final sendPort = IsolateNameServer.lookupPortByName(mainIsolate);
   if (sendPort == null) {
-    commonPrint.log('Service: mainIsolate sendPort not found, IPC unavailable');
+    commonPrint.log(
+      'Service: mainIsolate sendPort not found, IPC unavailable',
+    );
     return;
   }
 
@@ -357,7 +359,9 @@ void _handleMainIpc(ClashLibHandler clashLibHandler) {
   _safeSend(sendPort, _serviceReceiverPort!.sendPort);
 
   _messageReceiverPort = ReceivePort();
-  clashLibHandler.attachMessagePort(_messageReceiverPort!.sendPort.nativePort);
+  clashLibHandler.attachMessagePort(
+    _messageReceiverPort!.sendPort.nativePort,
+  );
   _messageReceiverPort!.listen((message) {
     _safeSend(sendPort, message);
   });
