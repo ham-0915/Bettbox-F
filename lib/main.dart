@@ -132,32 +132,6 @@ Future<void> _service(List<String> flags) async {
     // After 30s, relies on onAvailable/onLost callbacks (screen-on triggers them).
     Timer? smartStoppedPollTimer;
 
-    void startSmartStoppedPoll() {
-      smartStoppedPollTimer?.cancel();
-      int pollCount = 0;
-      smartStoppedPollTimer = Timer.periodic(
-        const Duration(seconds: 1),
-        (_) async {
-          pollCount++;
-          if (pollCount > 30) {
-            smartStoppedPollTimer?.cancel();
-            return;
-          }
-          final isSmartStopped = await vpn?.isSmartStopped() ?? false;
-          if (!isSmartStopped) {
-            smartStoppedPollTimer?.cancel();
-            return;
-          }
-          final isRunning = await vpn?.getStatus() ?? false;
-          if (!isRunning) {
-            smartStoppedPollTimer?.cancel();
-            return;
-          }
-          await checkSmartAutoStop();
-        },
-      );
-    }
-
     void stopSmartStoppedPoll() {
       smartStoppedPollTimer?.cancel();
     }
@@ -205,6 +179,32 @@ Future<void> _service(List<String> flags) async {
       } catch (e) {
         commonPrint.log('Smart auto stop check failed: $e');
       }
+    }
+
+    void startSmartStoppedPoll() {
+      smartStoppedPollTimer?.cancel();
+      int pollCount = 0;
+      smartStoppedPollTimer = Timer.periodic(
+        const Duration(seconds: 1),
+        (_) async {
+          pollCount++;
+          if (pollCount > 30) {
+            smartStoppedPollTimer?.cancel();
+            return;
+          }
+          final isSmartStopped = await vpn?.isSmartStopped() ?? false;
+          if (!isSmartStopped) {
+            smartStoppedPollTimer?.cancel();
+            return;
+          }
+          final isRunning = await vpn?.getStatus() ?? false;
+          if (!isRunning) {
+            smartStoppedPollTimer?.cancel();
+            return;
+          }
+          await checkSmartAutoStop();
+        },
+      );
     }
 
     // Debounced version for network change events
