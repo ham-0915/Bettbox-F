@@ -115,14 +115,63 @@ Future<void> _service(List<String> flags) async {
     final clashLibHandler = ClashLibHandler();
     final smartAutoStopLock = Lock();
 
+    // --- Operation cooldown ---
+    // After smartStop/smartResume, skip checks for 3 seconds to prevent
+    // rapid cycling (e.g. WiFi brief disconnect -> reconnect -> disconnect)
+    DateTime? _lastSmartOperationTime;
+    const _cooldownDuration = Duration(seconds: 3);
+
+    bool _isInCooldown() {
+      if (_lastSmartOperationTime == null) return false;
+      return DateTime.now().difference(_lastSmartOperationTime!) < _cooldownDuration;
+    }
+
+    // --- Smart-stopped polling timer ---
+    // When VPN is smart-stopped, poll every 1 second for up to 30 seconds.
+    // Covers Doze-delayed network callbacks (e.g. WiFi toggle after sleep).
+    // After 30s, relies on onAvailable/onLost callbacks (screen-on triggers them).
+    Timer? smartStoppedPollTimer;
+
+    void startSmartStoppedPoll() {
+      smartStoppedPollTimer?.cancel();
+      int pollCount = 0;
+      smartStoppedPollTimer = Timer.periodic(
+        const Duration(seconds: 1),
+        (_) async {
+          pollCount++;
+          if (pollCount > 30) {
+            smartStoppedPollTimer?.cancel();
+            return;
+          }
+          final isSmartStopped = await vpn?.isSmartStopped() ?? false;
+          if (!isSmartStopped) {
+            smartStoppedPollTimer?.cancel();
+            return;
+          }
+          final isRunning = await vpn?.getStatus() ?? false;
+          if (!isRunning) {
+            smartStoppedPollTimer?.cancel();
+            return;
+          }
+          await checkSmartAutoStop();
+        },
+      );
+    }
+
+    void stopSmartStoppedPoll() {
+      smartStoppedPollTimer?.cancel();
+    }
+
     Future<void> checkSmartAutoStop() async {
       try {
+        if (_isInCooldown()) return;
         final vpnProps = globalState.config.vpnProps;
         if (!vpnProps.smartAutoStop) return;
         final networks = vpnProps.smartAutoStopNetworks;
         if (networks.isEmpty) return;
 
         await smartAutoStopLock.synchronized(() async {
+          if (_isInCooldown()) return;
           final isSmartStopped = await vpn?.isSmartStopped() ?? false;
           final candidateIps =
               await vpn?.getLocalIpAddresses() ?? const <String>[];
@@ -143,10 +192,14 @@ Future<void> _service(List<String> flags) async {
             if (isRunning) {
               await vpn?.setSmartStopped(true);
               await vpn?.smartStop();
+              _lastSmartOperationTime = DateTime.now();
+              startSmartStoppedPoll();
             }
           } else if (!shouldStop && isSmartStopped) {
             await vpn?.setSmartStopped(false);
             await vpn?.smartResume(clashLibHandler.getAndroidVpnOptions());
+            _lastSmartOperationTime = DateTime.now();
+            stopSmartStoppedPoll();
           }
         });
       } catch (e) {
@@ -155,7 +208,6 @@ Future<void> _service(List<String> flags) async {
     }
 
     // Debounced version for network change events
-    // Shorter delay (500ms) for faster response
     int _networkChangeCheckSequence = 0;
     void _debouncedCheckSmartAutoStop() {
       final currentSequence = ++_networkChangeCheckSequence;
@@ -175,6 +227,7 @@ Future<void> _service(List<String> flags) async {
         },
         onStop: () async {
           await app.tip(appLocalizations.stopVpn);
+          stopSmartStoppedPoll();
           clashLibHandler.stopListener();
           await vpn?.stop();
         },
@@ -239,8 +292,9 @@ Future<void> _service(List<String> flags) async {
           return;
         }
         await vpn?.start(clashLibHandler.getAndroidVpnOptions());
-        // Smart auto-stop: retry every 1 second, up to 8 attempts (8 seconds window)
-        // Combined with onAvailable/onLost callbacks for immediate response
+        // Smart auto-stop: retry every 1 second, up to 8 attempts.
+        // Once smart-stopped, polling timer takes over.
+        // Cooldown prevents rapid cycling after each state change.
         Future(() async {
           final vpnProps = globalState.config.vpnProps;
           if (!vpnProps.smartAutoStop) return;
