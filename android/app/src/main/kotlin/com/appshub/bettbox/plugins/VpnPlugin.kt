@@ -1,16 +1,19 @@
 package com.appshub.bettbox.plugins
 
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.ServiceConnection
+import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.service.quicksettings.TileService
 import android.widget.Toast
 import androidx.core.content.getSystemService
@@ -70,6 +73,23 @@ data object VpnPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     private var quickResponseJob: Job? = null
     private var lastNetworkType: Int? = null
     private var lastDns = ""
+
+    // --- Screen state broadcast receiver ---
+    // When screen turns on, recheck network state to handle cases where
+    // Doze mode delayed network callbacks (e.g. WiFi off while screen off).
+    private val screenHandler = Handler(Looper.getMainLooper())
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> {
+                    screenHandler.postDelayed({
+                        invokeDart("networkChanged")
+                    }, 1500)
+                }
+            }
+        }
+    }
+    private val screenReceiverRegistered = AtomicBoolean(false)
 
     val networks: MutableSet<Network> = Collections.newSetFromMap(ConcurrentHashMap())
 
@@ -397,6 +417,26 @@ data object VpnPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
             networkCallbackRegistered.set(false)
             android.util.Log.e("VpnPlugin", "Failed to register network callback: ${it.message}")
         }
+
+        // Register screen state receiver for Doze workaround
+        if (screenReceiverRegistered.compareAndSet(false, true)) {
+            runCatching {
+                val filter = IntentFilter().apply {
+                    addAction(Intent.ACTION_SCREEN_ON)
+                    addAction(Intent.ACTION_USER_PRESENT)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    BettboxApplication.getAppContext().registerReceiver(
+                        screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED
+                    )
+                } else {
+                    BettboxApplication.getAppContext().registerReceiver(screenReceiver, filter)
+                }
+            }.onFailure {
+                screenReceiverRegistered.set(false)
+                android.util.Log.e("VpnPlugin", "Failed to register screen receiver: ${it.message}")
+            }
+        }
     }
 
     private fun unRegisterNetworkCallback() {
@@ -409,6 +449,15 @@ data object VpnPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
             networks.clear()
             networkDnsMap.clear()
             onUpdateNetwork()
+        }
+
+        // Unregister screen state receiver
+        if (screenReceiverRegistered.compareAndSet(true, false)) {
+            runCatching {
+                BettboxApplication.getAppContext().unregisterReceiver(screenReceiver)
+            }.onFailure {
+                android.util.Log.e("VpnPlugin", "Failed to unregister screen receiver: ${it.message}")
+            }
         }
     }
 
