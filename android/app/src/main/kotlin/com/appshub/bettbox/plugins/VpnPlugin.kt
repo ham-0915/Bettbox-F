@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.ServiceConnection
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
@@ -277,8 +278,6 @@ data object VpnPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
 
         if (callbackNetworks.isNotEmpty()) return callbackNetworks
 
-        // Layer 3: direct fallback to active network (covers cold boot case
-        // where NetworkCallback and allNetworks haven't fired yet)
         return connectivity?.activeNetwork?.let { active ->
             val caps = connectivity?.getNetworkCapabilities(active)
             if (caps == null || !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
