@@ -408,6 +408,7 @@ data object VpnPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
     }.build()
 
+    @Suppress("DEPRECATION")
     private fun registerNetworkCallback() {
         if (!networkCallbackRegistered.compareAndSet(false, true)) return
         runCatching {
@@ -418,20 +419,17 @@ data object VpnPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
             android.util.Log.e("VpnPlugin", "Failed to register network callback: ${it.message}")
         }
 
-        // Register screen state receiver for Doze workaround
+        // Register screen state receiver for Doze workaround.
+        // ACTION_SCREEN_ON and ACTION_USER_PRESENT are protected system broadcasts,
+        // so they will be delivered regardless of export flags.
+        @Suppress("UnspecifiedRegisterReceiverFlag")
         if (screenReceiverRegistered.compareAndSet(false, true)) {
             runCatching {
                 val filter = IntentFilter().apply {
                     addAction(Intent.ACTION_SCREEN_ON)
                     addAction(Intent.ACTION_USER_PRESENT)
                 }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    BettboxApplication.getAppContext().registerReceiver(
-                        screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED
-                    )
-                } else {
-                    BettboxApplication.getAppContext().registerReceiver(screenReceiver, filter)
-                }
+                BettboxApplication.getAppContext().registerReceiver(screenReceiver, filter)
             }.onFailure {
                 screenReceiverRegistered.set(false)
                 android.util.Log.e("VpnPlugin", "Failed to register screen receiver: ${it.message}")
